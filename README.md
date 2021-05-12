@@ -42,8 +42,11 @@ Includes staleness checks to recover after a lock-holding node/application crash
 
 # Inspiration
 
--
--
+- https://github.com/moxystudio/node-proper-lockfile (well thought out; some great ideas besides the regular list of `flock()`, `fcntl()`, etc. file locking story that's been developed since the days of NFS, SAMBA and flaky network filesystems)
+- https://github.com/judecumt/node-lockfile
+- https://github.com/ccache/ccache (LockFile class)
+- https://github.com/miquels/liblockfile
+- https://github.com/michael-uman/lockfile
 -
 
 
