@@ -47,7 +47,57 @@ Includes staleness checks to recover after a lock-holding node/application crash
 - https://github.com/ccache/ccache (LockFile class)
 - https://github.com/miquels/liblockfile
 - https://github.com/michael-uman/lockfile
--
+
+
+## R&D
+
+- https://github.com/bobvanderlinden/sharpfilesystem/issues/8#issuecomment-237612512 :: Atomic file operations: Replace, AtomicMove
+- http://perl.plover.com/yak/flock/ :: presentation File Locking Tricks and Traps
+- https://stackoverflow.com/questions/1599459/optimal-lock-file-method/52478000#52478000 :: race conditions on remove(), etc.
+- https://keithmaggio.wordpress.com/2011/01/24/code-snippet-file-locking/
+- https://stackoverflow.com/questions/14132767/win32-c-c-read-data-from-a-locked-file
+- https://cpp.hotexamples.com/examples/-/-/flock/cpp-flock-function-examples.html
+- https://stackoverflow.com/questions/472329/how-can-i-synchronize-two-processes-accessing-a-file-on-a-nas
+- https://en.wikipedia.org/wiki/Double-checked_locking
+- http://nfs.sourceforge.net/ :: NFS FAQ : A9. Why does opening files with O_APPEND on multiple clients cause the files to become corrupted? & other parts
+- https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/locking?view=msvc-160
+- https://stackoverflow.com/questions/581219/find-out-who-is-locking-a-file-on-a-network-share
+- https://www.linuxquestions.org/questions/programming-9/locking-files-with-c-751872/
+- https://stackoverflow.com/questions/2057784/locking-files-in-linux-with-c-c
+- https://stackoverflow.com/questions/575328/fcntl-lockf-which-is-better-to-use-for-file-locking
+- https://stackoverflow.com/questions/307437/moving-a-directory-atomically
+- https://rcrowley.org/2010/01/06/things-unix-can-do-atomically.html
+- https://www.sqlite.org/lockingv3.html :: section 6.0 How To Corrupt Your Database Files & other spots
+- https://ozlabs.org/~rusty/index.cgi/tech/2009-10-20.html :: EXT barrier=1
+- https://stackoverflow.com/questions/18585029/which-hdfs-operations-are-atomic
+- https://yakking.branchable.com/posts/atomic-file-creation-tmpfile/
+- https://yakking.branchable.com/posts/clobbering/
+- https://docs.oracle.com/javase/tutorial/essential/io/fileOps.html#atomic :: section "Atomic Operations"
+- https://github.com/ansible/ansible/issues/67794 :: The default permissions used by atomic_move can create files that are world readable
+- https://sqlite.org/atomiccommit.html
+- https://lwn.net/Articles/789600/ :: A way to do atomic writes
+- https://www.usenix.org/conference/fast15/technical-sessions/presentation/verma :: Failure-Atomic Updates of Application Data in a Linux File System
+- https://en.cppreference.com/w/cpp/filesystem/rename :: std::filesystem::rename
+- https://pubs.opengroup.org/onlinepubs/9699919799/functions/rename.html :: rename, renameat - rename file
+- https://pubs.opengroup.org/onlinepubs/9699919799/functions/contents.html :: ToC. See mkdir & other stdlib API refs in that list
+- https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdir.html#tag_16_325
+- https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html#tag_16_357
+- https://exceptionshub.com/how-do-i-lock-files-using-fopen.html
+- https://www.ibm.com/docs/en/i/7.4?topic=ssw_ibm_i_74/apis/fcntl.htm#HDRFCNLOC :: fcntl() -- Perform File Control Command
+- https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex :: LockFileEx function (fileapi.h)
+- https://www.gnu.org/software/libc/manual/html_node/File-Locks.html :: section 13.16 File Locks
+- https://unix.stackexchange.com/questions/20756/how-do-you-make-a-cross-process-locking-in-linux-c-c
+- https://www.cplusplus.com/forum/general/11124/ :: File locking for read and write
+- https://docs.microsoft.com/en-us/windows-server/troubleshoot/understanding-the-lack-of-distributed-file-locking-in-dfsr :: Understanding (the Lack of) Distributed File Locking in DFSR
+- https://docs.microsoft.com/en-us/windows/win32/fileio/opportunistic-locks
+- https://bytes.com/topic/c/answers/212960-file-locking
+- https://www.thegeekstuff.com/2012/04/linux-file-locking-types/
+- https://www.codeproject.com/articles/49670/inter-computer-read-write-file-lock
+- https://www.codeproject.com/questions/568056/mutexplusnotplusworkingplusforpluscross-processplu
+
+
+
+
 
 
 # Rationale
