@@ -1,11 +1,100 @@
 # lib_nas_lockfile
 
-API for using lockfiles on local and remote storage in a pluriform network environment. 
+API for using lockfiles on local and remote storage in a pluriform network environment / NAS / shared file system. 
 
-Includes staleness checks to recover after a lock-holding node/application crashed.
+Includes staleness checks to recover after a lock-holding node/application crashed or network failure ('force majeure' fatalities).
+
+## When to use this library
+
+When you are not in a position where you and your software can demand a rigorous DeVOps environment,
+a network node *monoculture* (i.e. all connected stuff running the same OS and version thereof) or when
+you don't have access to a central 'monitor' server which takes care of all the extra-node locking requests
+that come with your nodes' demands to access the networked file system.
+
+In practice, candidates for using this library include:
+- networked software running on home networks, which include NAS and/or Cloud Storage where files are stored and *shared* among the nodes,
+- software designed for multi-user environments, where you cannot **guarantee** every operation is properly protected by a network server or other 'monitor' means, which handles lock requests at a central node (or other specialized network locking facilities are absent).
+- software offering remote backup storage and/or data sync facilities, which MAY be synced from multiple locations and/or user nodes: a looser "collaboration" scenario
+- anywhere your software cannot depend on properly managed network tokens to provide dependable locking mechanisms and you end up having to design your software using the least common denominator in network sharing: a shared file system where you store your stuff for others to pick up and continue working on.
+- anywhere where you havee a shared file system that only "up" part of the time and you have to reckon with a set of nodes which will be "off net" part of the time; you use the shared, networked, file system for synchronizing the nodes and need file locking for that part while doing the syncing. Recoverable locking mechanisms mey be part of your requirements.
+- you are running stuff on top of NFS, SMB ("Samba"), what-have-you and you need something that doesn't depend on Linux-only `flock()` calls and other highly non-portable !@#$%^&.
+
+This library (rather: C++ class) provides a solid "old school" Least Common Denominator locking system for shared file systems.
+This library includes "Lock Staleness Detection" as a built-in feature to help you recover from spurious 'force majeure' network failures and other types of mishap that can corrupt/break a regular file-system based locking mechanism: once the library code detects a Stale Lock, it is automatically cleaned up and released, so the software may pick up and recover from there without 
+needing an administrator with root privs to manually clean the lock or perform other manual actions to allow the system to continue.
+
+**Do** keep in mind that a Stale Lock always signals a grave 'force majeure' situation, e.g. crashed node, locked-up unrecoverable application instance, network failure, etc. and this will be signalled by the library in the error codes for the various APIs: you are **strongly advised to check and log all error response values produced by the library**: while the software **can** be written to auto-recover from these situations, a human should always be able to come in and inspect the proceedings at that point (and some time before and afterwards) to analyze and report on the reliability and soundness of the system as a whole.
+
+While everyone would dearly like to work on other stuff than semaphores and the like, I would advise the developers using any locking primitives, whether this one, pthread or whatever floats your boat, to always code-review such libraries: locking is a critical mechanism is any software design that needs them and some extra RTFC effort at the beginning will save y'all some pain in the future. I know it has been the case for me over the years and this is why I do not accept any closed source libraries critical to a software project any more: those have cost me dearly over time.
+
+## What do you mean: Least Common Denominator in FileSystem Networking?
+
+I hope you enjoy what you find here. While there are various options out there, those are often `flock()`/`fcntl()` based and thus assume a rather monocultural network (Linux machines only and *pray to the gods* they are all synchronized to the same OS version).
+
+*This* library is designed, relying on a single assumption that holds for almost all filesystems out there: **mkdir() is atomic**.
+
+That is, in my experience, the Least Common Denominator in various file sharing and mixxed OS environments. If your `mkdir()` is **not atomic** (e.g. DropBox, Google Drive, etc.), then you are, as the Americans say, SOL. Shit Out \[of] Luck.
+
+> If you know of ways to provide an atomic locking operation on thosee kinds of networks, I'm all ears. File an issue and provide some info in the issue tracker for this repo.
+> 
+> Meanwhile, I will reamin with my belief communications through such 'networks' require different measures: there, one would probably get away with a paradigm similar to message-passing, where each node has its own transmitter station and you code a simple generic 'station discovery' mechanism.
+> 
+> That aside, this library is targetting NAS (Network Attached Storage) systems and similar file system networks, where the above assumption will hold.
+> 
+
+
+
 
 
 # API
+
+All locking logic is contained in a single, simple C++ class:
+
+```C++
+namespace NetworkedFileIO {
+  NASLockFile(const std::string remote_directory_path) {
+    ...
+  }
+}
+```
+
+All API methods return boolean state values and will set the referenced `std::error_code` error value,
+where applicable.
+
+We do not use exceptions as we consider those only useful for handling spurious or otherwise undesirable
+code flow: with locks, (almost) nothing is out of the ordinary and should, IMO, not be dealt with
+using exceptions when a perfectly fine state + error checking mechanism can provide code with a clear
+code flow for both good (desirable) and undesirable situations, the latter expected to happen often enough
+to be part of the 'normal' with locking systems, where you cannot do happy-go-lucky haphazard coding,
+which is so often observed in business applications.
+
+Rant aside, how are the APIs organized?
+
+There's the ubiquitous lock+release calls `create_lock()` + `delete_lock()`. Obvious stuff.
+
+As we offer implicit Staleness Detection logic, we also need a Watchdog (which you will be **kicking** frequently to ensure everyone around can observe your lock(s) to be **alive** rather than **stale**), plus a monitor API where a node can observe a lock and determine whether the lock has become available and/or has become **stale** -- in which case the monitor routine will automatically clean up the stale lock and release it, so the regular lock-acquisition logic can run its course in all nodes once again: those are `refresh_lock()` for kicking the watchdog for the lock you acquired and `monitor_for_lock_availability()` for checking availability and staleness of a lock.
+
+Root/administrative support APIs have been provided as well, which are expected to be used in very specific, human-controlled, tools which will clean up a lock after a 'force majeure' event which either cannot be automatically recovered or when the system administrator decides all nodes and locks need to be *reset* to their default state, e.g. after a fresh software install across the board and the administrator and software designer involved do not wish to rely on the lock staleness auto-recovery mechanism, but go in and reset everything for all to give everyone a fresh clean start. This is the `nuke_stale_lock()` API.
+
+As an additional diagnostic assistant service for special logging and other purposes, the `active_lockfile()` API is provided to list the path of the currently acquired file lock.
+
+> The public `override_chrono_clock_beat_multiplier()`, `reset_chrono_clock_beat_multiplier_override()` and `get_chrono_clock_beat_multiplier()` APIs have been provided for (unit)test purposes only and SHOULD NOT be used in your software: these merely provide a machanism to "speed up" the "*staleness timeouts*" employed by the library.
+
+
+## Does this library reckon with race conditions, fringe cases and other "weird shit" one will observe in the wild with systems like these?
+
+Yes, we do.
+
+For example, the Staleness Detection Logic has been engineered to counter the scenario where multiple monitoring nodes decree a observed lock as **stale** all at the same time: an **aditional, yet independent** lock is used to ensure only one of these nodes is allowed to provide the cleanup-after-staleness procedure to ensure everyone is and remains in a proper known state regarding the (stale) lock.
+
+We also have reckoned with the race condition which can occur when you go and clean/release a stale lock, while multiple nodes are monitoring said lock for a chance to request and obtain a lock on it themselves: this is why `monitor_for_lock_availability()` only ever reports **opportunity to request a lock**: since we assume only `mkdir()` is atomic, we MUST separate the Staleness Cleanup (and consequent lock **release** as (final) part of that cleanup) from any lock request activity: while the `monitor_for_lock_availability()` API **MAY** report an **opportunity to request a lock successfully**, it never guarantees such success: `create_lock()` will either succeed or fail and when you need that lock, you will then have to cycle and retry again later.
+
+> Of course you may repeatedly call `create_lock()` without any call to `monitor_for_lock_availability()`; the latter is provided as additional help and we advise you to use it when you do not have the lock yet to ensure your node will actively monitor the lock for staleness and help resolve such a situation iff it occurs.
+> 
+
+Another fringe case we have provided for is the **highly undeesirable** situation where a software allows its lock to go stale by not kicking the watchdog or by being extrmely *lazy* about it: when this happens, your `delete_lock()` call will observe this and report an error accordingly. Which, if you otherwise followed proper coding practices, i.e. check your success/fail return and error codes rigorously, are able to at least log and thus notify the user and/or investigator who will have a look at the logfiles of your application after the fact.
+
+## API list
 
 - `create_lock()`: create the lockfile. Return failure when lockfile is already locked by others or otherwise cannot be created.
 - `delete_lock()`: delete the lockfile we own.
@@ -13,7 +102,10 @@ Includes staleness checks to recover after a lock-holding node/application crash
 - `monitor_for_lock_availability()`: periodically checks the lockfile to discover *staleness* (the **opposite of freshness**) or *absence* of the lockfile, i.e. *wait for opportunities to create the lockfile*. 
 - `nuke_stale_lock()`: delete the lockfile when it has been found to be *stale* (by `monitor_for_lock_availability()`). Return failure when the lockfile could not *legally* be cleaned up. Return warning when the lockfile has already been cleaned (*refreshed* or *nuked*) by another application / network node.
 
-## Requirements
+
+## Design Requirements of this library
+
+(TBD)
 
 - All nodes / applications sharing the same lockfile MUST use the same refresh interval ± 25% \[*Tolerance includes round-trip network latency*]
 
