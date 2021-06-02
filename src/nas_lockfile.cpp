@@ -86,8 +86,10 @@ NASLockFile::NASLockFile(const std::string remote_directory_path)
 	m_clock_vs_filetime_diff(0),
 	m_monitoring_active(false),
 	m_monitoring_watchdog_file_exists(false),
+	m_lost_lock_due_to_external_circumstances(false),
 	m_monitoring_last_watchdog_kick_time(),
-	m_monitoring_time_of_last_observed_change()
+	m_monitoring_time_of_last_observed_change(),
+	m_clock_beat_override(0)
 {
 	m_lockfile_path                = m_remote_directory_path / "__lock.lockdir";
 	m_stale_recovery_lockfile_path = m_remote_directory_path / "_stale.lockdir";
@@ -108,6 +110,7 @@ NASLockFile::~NASLockFile()
 bool NASLockFile::setup_watchdog_file(std::error_code& ec)
 {
 	m_lock_obtained = true;
+	m_lost_lock_due_to_external_circumstances = false;
 
 	// decorate the lock & prep for anti-staleness watchdog activity afterwards
 
@@ -135,14 +138,17 @@ bool NASLockFile::setup_watchdog_file(std::error_code& ec)
 		// 
 		// So we track the local clock and use that to update the file MTIME via
 		// tracked difference (see refresh_lock() method further below).
-		m_file_time_at_lock_creation = fs::last_write_time(watchdogfile_path);
-		m_local_clock_at_lock_creation = chrono::system_clock::now();
+		m_file_time_at_lock_creation = m_monitoring_last_watchdog_kick_time = fs::last_write_time(watchdogfile_path);
+		m_local_clock_at_lock_creation = m_monitoring_time_of_last_observed_change = chrono::system_clock::now();
 		m_clock_vs_filetime_diff = int64_t(m_local_clock_at_lock_creation.time_since_epoch().count()) - int64_t(m_file_time_at_lock_creation.time_since_epoch().count());
 
 		// set up the watchdog beat frequency expectation:
 		using namespace std::literals; // enables the usage of 24h, 1ms, 1s instead of e.g. std::chrono::hours(24), accordingly
 		using namespace std::chrono_literals;
-		m_next_write_time_kick = m_local_clock_at_lock_creation + 10s;
+		// Note to self: write it with these steps or delta_탎 will be zero for any multiplier > 10.  :-(((
+		chrono::microseconds delta_탎 = 10s;
+		delta_탎 /= get_chrono_clock_beat_multiplier();
+		m_next_write_time_kick = m_local_clock_at_lock_creation + delta_탎;
 
 #if 0
 		auto print_last_write_time = [](fs::file_time_type const& ftime) {
@@ -171,6 +177,12 @@ bool NASLockFile::cleanup_after_ourselves(std::error_code& ec)
 	m_lock_obtained = false;
 	m_monitoring_active = false; // RESET monitoring phase state as monitoring is only sane during those times we DO NOT have a lock
 
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
+
 	// 2. atomic operation: release lock?
 
 	// fs::remove_all() is expected to have as an atomic operation
@@ -183,7 +195,9 @@ bool NASLockFile::cleanup_after_ourselves(std::error_code& ec)
 	if (!fs::remove_all(m_lockfile_path, ec))
 	{
 		// ignore the error per se...
+#if 0
 		std::cout << "Could not set up/release the lock properly: " << ec.category().name() << "::" << ec.message() << '\n';
+#endif
 		return false;
 	}
 	return true;
@@ -197,9 +211,16 @@ bool NASLockFile::create_lock(std::error_code& ec)
 {
 	// 1. prep work
 
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
+
 	if (m_lock_obtained)
 	{
 		// already locked by us
+		ec = make_error_code(E::EWeAlreadyAcquiredTheLock);
 		return true;
 	}
 
@@ -221,6 +242,7 @@ bool NASLockFile::create_lock(std::error_code& ec)
 		// diagnose the error and recover
 		switch (ec.value())
 		{
+		case 0: // SUCCESS: that's when fs::create_directory() decides the directory already exists, but considers that to be OK (fstat-->OK) in Win32!
 		case EEXIST:
 			// locked by someone else out there.
 			// Do not touch.
@@ -243,6 +265,17 @@ bool NASLockFile::delete_lock(std::error_code& ec)
 {
 	// 1. prep work
 
+	m_monitoring_active = false; // RESET monitoring phase state as monitoring is only sane during those times we DO NOT have a lock
+
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		m_lost_lock_due_to_external_circumstances = false;
+		m_lock_obtained = false;
+
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
+
 	if (!m_lock_obtained)
 	{
 		// that lock isn't even owned by us
@@ -250,7 +283,48 @@ bool NASLockFile::delete_lock(std::error_code& ec)
 		return false;
 	}
 
-	m_monitoring_active = false; // RESET monitoring phase state as monitoring is only sane during those times we DO NOT have a lock
+	// and before we go and release the lock, we do a quick last check to see if our lock
+	// somehow got damaged or went "stale", e.g. when the userland code did not kick the watchdog timely.
+	// If we don't do this last check here, before releasing the lock, chances are we may never know
+	// our lock went stale (for whatever reason), making for very hard to diagnose bugs in RL (Real Life: production code)!
+	// Hence this last check before we release the lock: the minimal cost is quite acceptable...
+	//
+	// CAVE CANEM: when another process has already discovered that this lock was stale and has acquired
+	// its own lock, a simple 'exist' check won't suffice as the watchdog lockfile will be present and
+	// we will be releasing a lock already held by someone else.
+	// Hence the stringent check where we double-check to make sure the watchdog file 'last edit' time
+	// matches the one we recall from the last time we kicked the bugger...
+
+	// make sure we have a legal watchdog file waiting for us.
+	if (!fs::is_regular_file(m_watchdogfile_path, ec))
+	{
+		// Note: we are already intent on releasing the lock, so no use setting the state variable.
+		// We DO, however, set the appropriate error codes so error checks and subsequent logging
+		// in userland code will catch this situation.
+		m_lost_lock_due_to_external_circumstances = false;
+		m_lock_obtained = false;
+
+		ec = make_error_code(E::ELostLockWatchdogFile);
+
+		// shite. Did we loose the lock as well? That would be REALLY bad!
+		if (!fs::exists(m_lockfile_path))
+		{
+			ec = make_error_code(E::ELostLock);
+		}
+		return false;
+	}
+
+	std::filesystem::file_time_type wd_t = fs::last_write_time(m_watchdogfile_path, ec);
+	auto diff = wd_t - m_monitoring_last_watchdog_kick_time;
+	// did we observe MTIME change?
+	// If so, then SOMEONE ELSE has kicked our watchdog and we clearly have already lost the lock
+	// due to staleness -- we haven't kicked the watchdog timely enough, or so it seems.
+	// Barf a hairball.
+	if (diff.count() != 0)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
 
 	// 2. atomic operation: release lock?
 	return cleanup_after_ourselves(ec);
@@ -263,6 +337,12 @@ bool NASLockFile::delete_lock(std::error_code& ec)
 bool NASLockFile::refresh_lock(std::error_code& ec)
 {
 	// 1. only kick the watchdog on a lock we own:
+
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
 
 	if (!m_lock_obtained)
 	{
@@ -286,6 +366,7 @@ bool NASLockFile::refresh_lock(std::error_code& ec)
 	// make sure we have a legal watchdog file waiting for us.
 	if (!fs::is_regular_file(m_watchdogfile_path, ec))
 	{
+		m_lost_lock_due_to_external_circumstances = true;
 		ec = make_error_code(E::ELostLockWatchdogFile);
 
 		// shite. Did we loose the lock as well? That would be REALLY bad!
@@ -296,10 +377,30 @@ bool NASLockFile::refresh_lock(std::error_code& ec)
 		return false;
 	}
 
+	// CAVE CANEM: when another process has already discovered that this lock was stale and has acquired
+	// its own lock, the simple 'exist' check above won't suffice as the watchdog lockfile will be present and
+	// we will be kicking a lock watchdog already owned by someone else.
+	// Hence the stringent check below where we double-check to make sure the watchdog file 'last edit' time
+	// matches the one we recall from the last time we kicked the bugger...
+
+	std::filesystem::file_time_type wd_t = fs::last_write_time(m_watchdogfile_path, ec);
+	auto mtime_diff = wd_t - m_monitoring_last_watchdog_kick_time;
+	// did we observe MTIME change?
+	// If so, then SOMEONE ELSE has kicked our watchdog and we clearly have already lost the lock
+	// due to staleness -- we haven't kicked the watchdog timely enough, or so it seems.
+	// Barf a hairball.
+	if (mtime_diff.count() != 0)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
+
+	// now we've done our sanity checks, it's time to kick that watchdoggo. Let's get nasty...
+
 	using namespace std::literals; // enables the usage of 24h, 1ms, 1s instead of e.g. std::chrono::hours(24), accordingly
 	using namespace std::chrono_literals;
 
-	// since we cannot easily convert TO file_time_type in C17, we calc differences based on our local clock
+	// since we cannot easily convert TO file_time_type in C++17, we calc differences based on our local clock
 	// and adjust the touch time accordingly:
 	// - since we have the lock, nobody but us should be touching that watchdog file
 	//   hence we can "safely" assume the previously registered MTIME is still there.
@@ -308,21 +409,31 @@ bool NASLockFile::refresh_lock(std::error_code& ec)
 	// - calculate the time diff between now and then in local clock ticks.
 	// - convert that to file_time_type ticks by way of the ratios.
 	// - add the diff to the file_time and update MTIME: *KICK*.
+
+	//m_file_time_at_lock_creation = m_monitoring_last_watchdog_kick_time = fs::last_write_time(watchdogfile_path);
+	//m_local_clock_at_lock_creation = m_monitoring_time_of_last_observed_change = chrono::system_clock::now();
+	//m_clock_vs_filetime_diff = int64_t(m_local_clock_at_lock_creation.time_since_epoch().count()) - int64_t(m_file_time_at_lock_creation.time_since_epoch().count());
+
 	fs::file_time_type ft = m_file_time_at_lock_creation; 
-	int64_t diff = int64_t(t.time_since_epoch().count()) - int64_t(m_local_clock_at_lock_creation.time_since_epoch().count());
+	auto diff_dur = t - m_local_clock_at_lock_creation;
+	int64_t diff = diff_dur.count();
 	// `diff` is now in local clock ticks and must be converted to file time ticks:
+	const auto tick1 = chrono::system_clock::time_point::period();
+	const auto fsgranularity = fs::file_time_type::period();
 	const double conversion_factor = /* file_time_type::period / chrono::system_clock::time_point */
-		(fs::file_time_type::period().num * chrono::system_clock::time_point::period().den) /
-		double(fs::file_time_type::period().den * chrono::system_clock::time_point::period().num);
+		(fsgranularity.num * tick1.den) /
+		double(fsgranularity.den * tick1.num);
 	diff = int64_t(diff * conversion_factor);
 
 	fs::file_time_type::duration d(diff);
 	ft += d;
 	fs::last_write_time(m_watchdogfile_path, ft, ec);
-	//m_last_write_time = fs::last_write_time(m_watchdogfile_path, ec);
+	m_monitoring_last_watchdog_kick_time = fs::last_write_time(m_watchdogfile_path, ec);
 
 	// again set up the watchdog beat frequency expectation:
-	m_next_write_time_kick += 10s;
+	chrono::microseconds delta_탎 = 10s;
+	delta_탎 /= get_chrono_clock_beat_multiplier();
+	m_next_write_time_kick += delta_탎;
 
 #if 0
 	auto print_last_write_time = [](fs::file_time_type const& ftime) {
@@ -346,6 +457,12 @@ bool NASLockFile::refresh_lock(std::error_code& ec)
 bool NASLockFile::check_staleness_and_report_age(chrono::system_clock::time_point t, uint64_t & seconds_ago, std::error_code& ec)
 {
 	seconds_ago = 0;
+
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;		// do NOT signal immediate opportunity --> FALSE
+	}
 
 	// we can do some rough & quick checks here, assuming we DO NOT want to acquire a lock
 	// *immediately* upon discovering availability. We can keep those actions separate.
@@ -375,7 +492,7 @@ bool NASLockFile::check_staleness_and_report_age(chrono::system_clock::time_poin
 	// That "change" can be a change in the presence/absence status of the watchdog file,
 	// or a slowly changing MTIME of said watchdog file.
 
-	// check if we are already the monitoring for some time.
+	// check if we are already monitoring for some time.
 	// IFF not, reset the state/counters to something sane: those should be values
 	// such that our first monitoring rounds SHOULD assume 'freshness' automatically.
 	if (!m_monitoring_active)
@@ -416,7 +533,8 @@ bool NASLockFile::check_staleness_and_report_age(chrono::system_clock::time_poin
 	auto age = t - m_monitoring_time_of_last_observed_change;
 	// convert to seconds:
 	// seconds_ago = age / chrono::system_clock::time_point::period
-	seconds_ago = (age.count() * chrono::system_clock::time_point::period().den) / chrono::system_clock::time_point::period().num;
+	auto tick1 = chrono::system_clock::time_point::period();
+	seconds_ago = (age.count() * get_chrono_clock_beat_multiplier() * tick1.num) / tick1.den;
 
 	return false;
 }
@@ -427,6 +545,12 @@ bool NASLockFile::check_staleness_and_report_age(chrono::system_clock::time_poin
 // or *absence* of the lockfile, i.e. *wait for opportunities to create the lockfile*.
 bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 {
+	if (m_lost_lock_due_to_external_circumstances)
+	{
+		ec = make_error_code(E::ELostLock);
+		return false;
+	}
+
 	if (m_lock_obtained)
 	{
 		ec = make_error_code(E::EWeAlreadyAcquiredTheLock);
@@ -469,6 +593,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// diagnose the error and recover
 			switch (ec.value())
 			{
+			case 0: // SUCCESS: that's when fs::create_directory() decides the directory already exists, but considers that to be OK (fstat-->OK) in Win32!
 			case EEXIST:
 				// locked by someone else out there.
 				// Let them clean up.
@@ -560,7 +685,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 				return false;
 			}
 
-			// Okay, so now wee have releasded the regular lock. That also means we've now implicitly spotted
+			// Okay, so now we have releasded the regular lock. That also means we've now implicitly spotted
 			// a locking opportunity, which is what this call is about, hence we should set our proper return value now.
 			locking_opportunity = true;
 
@@ -592,7 +717,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// HOWEVER, they use the same code as us (for it'll be the same library) and there's a bit of a
 			// RACE CONDITION above in our initial version:
 			// the code flow from LAST MEASUREMENT to the decision of staleness and following attempt to
-			// acquire a STALENESS LOCK is NOT ATOMIC. Thus any node out there may have traveled our path
+			// acquire a STALENESS LOCK is NOT ATOMIC [ACROSS THE NETWORK]. Thus any node out there may have traveled our path
 			// alongside and is now also living in the belief that they have acquired a good staleness lock above.
 			//
 			// The only barrier for them will have been the staleness lock acquisition, which was successful for US.
@@ -612,11 +737,11 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// got ourselves out of the staleness-based lockup.
 			// What will happen then to the 'late party' (which was us in the scenario above, but now that we flipped
 			// roles midway through this story, we are the fast one and have RELEASED the regular lock.
-			// That will imply that WE (the tardy onee) will acquire the staleness lock successfully, but then we MUST
+			// That will imply that WE (the tardy one) will acquire the staleness lock successfully, but then we MUST
 			// discover an absent or FRESH watchdog file, for the regular lock has been either RELEASED and is pending
 			// a lock request OR another node has come forward and acquired that lock already.
 			//
-			// Meanwhile, do we need to worry about our staleness lock? Not relaly, as that one will only be requested
+			// Meanwhile, do we need to worry about our staleness lock? Not really, as that one will only be requested
 			// once some node decides the regular lock is stale and that won't happen for quite a while as there's definitely
 			// recent 'movement' right now!
 			// All the nodes that acquire the staleness lock one after another in this fashion MUST therefor recheck the
@@ -633,7 +758,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// -------------
 			//
 			// Extra TODO for later: there's also the (spurious) scenario where the application terminates or otherwise
-			// b0rks while executing this staleness recovery seection: we then have a STALE STALENESS LOCK. That is a recursive
+			// b0rks while executing this staleness recovery section: we then have a STALE STALENESS LOCK. That is a recursive
 			// problem which needs addressing in the next version. It's rare, but we know what happens when it's got a
 			// chance of 1 in a million. If you are unsure, cheeck your Pratchett references. ;-))
 			// 
@@ -671,6 +796,8 @@ bool NASLockFile::nuke_stale_lock(std::error_code& ec)
 
 	m_lock_obtained = false;
 	m_monitoring_active = false;		
+	m_monitoring_watchdog_file_exists = false;
+	m_lost_lock_due_to_external_circumstances = false;
 
 	return true;
 }

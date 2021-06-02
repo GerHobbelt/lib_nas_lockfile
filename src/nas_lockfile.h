@@ -76,8 +76,33 @@ namespace NetworkedFileIO {
 		bool nuke_stale_lock(std::error_code& ec);
 
 		// Return the path to the current active lockfile.
-		// Return NULL when there's no currently active lockfile.
+		// Return string::empty when there's no currently active lockfile.
 		std::string active_lockfile();
+
+		// Allow test tools and other special rigs to 'tweak' our chrono beat, i.e.
+		// the timebase we use to decide whether locks have become stale *and* whether
+		// we should really kick the watchdog again (to prevent staleness).
+		//
+		// You can only override the basic 'beat' (which in itself is already dangerous
+		// enough, because now no need to do this EVERYWHERE!); you do NOT have the option
+		// to change the watchdog kick beat vs. the steleness monitor beat frequencies:
+		// that is extremely risky!
+		//
+		// We also DO NOT allow this override to be class-wide (a.k.a. 'static') because
+		// then this undesirable fiddling with the beat can become 'sticky' very easily.
+		// We Do Not Want That, Ever!
+		void override_chrono_clock_beat_multiplier(int64_t one_beat_duration_multiplier)
+		{
+			m_clock_beat_override = one_beat_duration_multiplier;
+		}
+		void reset_chrono_clock_beat_multiplier_override(void)
+		{
+			m_clock_beat_override = 0;
+		}
+		int64_t get_chrono_clock_beat_multiplier(void)
+		{
+			return m_clock_beat_override > 0 ? m_clock_beat_override : 1 /* standard beat: 1 second */;
+		}
 
 	private:
 		const std::filesystem::path m_remote_directory_path;
@@ -87,12 +112,14 @@ namespace NetworkedFileIO {
 		bool m_lock_obtained;
 		bool m_monitoring_active;
 		bool m_monitoring_watchdog_file_exists;
+		bool m_lost_lock_due_to_external_circumstances;   // flags error state (which is reset by releasing the (lost) lock).
 		std::filesystem::file_time_type m_file_time_at_lock_creation;
 		std::filesystem::file_time_type m_monitoring_last_watchdog_kick_time;
 		std::chrono::system_clock::time_point m_local_clock_at_lock_creation;
 		std::chrono::system_clock::time_point m_next_write_time_kick;
 		std::chrono::system_clock::time_point m_monitoring_time_of_last_observed_change;
 		int64_t m_clock_vs_filetime_diff;
+		int64_t m_clock_beat_override;
 
 	protected:
 		bool cleanup_after_ourselves(std::error_code& ec);
@@ -103,7 +130,7 @@ namespace NetworkedFileIO {
 
 	inline std::string NASLockFile::active_lockfile()
 	{
-		if (!m_lock_obtained)
+		if (!m_lock_obtained || m_lost_lock_due_to_external_circumstances)
 			return "";
 
 		return std::move(m_lockfile_path.u8string());
