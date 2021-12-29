@@ -187,6 +187,19 @@ Another fringe case we have provided for is the **highly undeesirable** situatio
 - https://www.codeproject.com/articles/49670/inter-computer-read-write-file-lock
 - https://www.codeproject.com/questions/568056/mutexplusnotplusworkingplusforpluscross-processplu
 
+### Sideways related material
+
+Places where the non-local file locking problem and its consequences is discussed in practical environments.
+
+- https://docs.microsoft.com/en-us/windows-server/troubleshoot/understanding-the-lack-of-distributed-file-locking-in-dfsr :: MSWindows: Understanding (the Lack of) Distributed File Locking in DFSR
+- https://docs.microsoft.com/en-us/windows/win32/fileio/locking-and-unlocking-byte-ranges-in-files :: Locking and Unlocking Byte Ranges in Files
+- https://support.centrestack.com/hc/en-us/articles/360041243194-How-the-CentreStack-File-Locking-Mechanism-Works
+- https://docs.microsoft.com/en-us/rest/api/storageservices/managing-file-locks
+- https://apenwarr.ca/log/20101213 :: Everything you never wanted to know about file locking
+- https://en.wikipedia.org/wiki/File_locking
+- https://sqlite.org/lockingv3.html :: File Locking And Concurrency In SQLite Version 3
+
+
 
 
 
