@@ -145,10 +145,10 @@ bool NASLockFile::setup_watchdog_file(std::error_code& ec)
 		// set up the watchdog beat frequency expectation:
 		using namespace std::literals; // enables the usage of 24h, 1ms, 1s instead of e.g. std::chrono::hours(24), accordingly
 		using namespace std::chrono_literals;
-		// Note to self: write it with these steps or delta_µs will be zero for any multiplier > 10.  :-(((
-		chrono::microseconds delta_µs = 10s;
-		delta_µs /= get_chrono_clock_beat_multiplier();
-		m_next_write_time_kick = m_local_clock_at_lock_creation + delta_µs;
+		// Note to self: write it with these steps or delta_Âµs will be zero for any multiplier > 10.  :-(((
+		chrono::microseconds delta_Âµs = 10s;
+		delta_Âµs /= get_chrono_clock_beat_multiplier();
+		m_next_write_time_kick = m_local_clock_at_lock_creation + delta_Âµs;
 
 #if 0
 		auto print_last_write_time = [](fs::file_time_type const& ftime) {
@@ -431,9 +431,9 @@ bool NASLockFile::refresh_lock(std::error_code& ec)
 	m_monitoring_last_watchdog_kick_time = fs::last_write_time(m_watchdogfile_path, ec);
 
 	// again set up the watchdog beat frequency expectation:
-	chrono::microseconds delta_µs = 10s;
-	delta_µs /= get_chrono_clock_beat_multiplier();
-	m_next_write_time_kick += delta_µs;
+	chrono::microseconds delta_Âµs = 10s;
+	delta_Âµs /= get_chrono_clock_beat_multiplier();
+	m_next_write_time_kick += delta_Âµs;
 
 #if 0
 	auto print_last_write_time = [](fs::file_time_type const& ftime) {
@@ -570,7 +570,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 	// networked filesystems aren't always the fastest updating systems out there: DropBox, Google Drive, etc.
 	// do not just suffer from network latency but are far more severely impacted by their own update frequencies.
 	//
-	// TODO: make this user-configgurable so we can test & twist that dial as we get this code out there
+	// TODO: make this user-configurable so we can test & twist that dial as we get this code out there
 	// in the wild and are expecting curious trouble to rear its ugly head. (von Moltke re: networking)
 
 	// note: seconds_ago CAN be negative: that's us 'faking' a watchdog kick during state change above.
@@ -611,7 +611,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// and check if anything has changed there, thanks to very swift action from a fast neighbour:
 			//
 			// As we check against the exact same local clock time as before (`t`) all results, including
-			// the calculated `seconds_ago` value, MUST MATCH EXACTLY or we can be asured a foreign party
+			// the calculated `seconds_ago` value, MUST MATCH EXACTLY or we can be assured a foreign party
 			// is ahead of us and we should quietly leave the scene...
 			uint64_t seconds_ago_recheck;
 			bool locking_opportunity = check_staleness_and_report_age(t, seconds_ago_recheck, ec);
@@ -685,7 +685,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 				return false;
 			}
 
-			// Okay, so now we have releasded the regular lock. That also means we've now implicitly spotted
+			// Okay, so now we have released the regular lock. That also means we've now implicitly spotted
 			// a locking opportunity, which is what this call is about, hence we should set our proper return value now.
 			locking_opportunity = true;
 
@@ -746,7 +746,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// recent 'movement' right now!
 			// All the nodes that acquire the staleness lock one after another in this fashion MUST therefor recheck the
 			// staleness state BEFORE doing ANYTHING, as all these nodes will share that 'tardiness' scenario with us:
-			// near simultaneous staleness decision but fast vs slow staleness lock acquisistion as described above.
+			// near simultaneous staleness decision but fast vs slow staleness lock acquisition as described above.
 			//
 			// Hence these two MANDATORY ACTIONS WITHIN the staleness lock critical section MUST be done by everyone:
 			//
@@ -760,7 +760,7 @@ bool NASLockFile::monitor_for_lock_availability(std::error_code& ec)
 			// Extra TODO for later: there's also the (spurious) scenario where the application terminates or otherwise
 			// b0rks while executing this staleness recovery section: we then have a STALE STALENESS LOCK. That is a recursive
 			// problem which needs addressing in the next version. It's rare, but we know what happens when it's got a
-			// chance of 1 in a million. If you are unsure, cheeck your Pratchett references. ;-))
+			// chance of 1 in a million. If you are unsure, check your Pratchett references. ;-))
 			// 
 			// ------------
 			return locking_opportunity;
