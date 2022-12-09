@@ -133,9 +133,8 @@ namespace NetworkedFileIO {
 		if (!m_lock_obtained || m_lost_lock_due_to_external_circumstances)
 			return "";
 
-		return std::move(m_lockfile_path.u8string());
+		return std::move(m_lockfile_path.string());
 	}
-
 
 }
 
