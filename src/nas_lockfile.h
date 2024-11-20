@@ -66,7 +66,7 @@ namespace NetworkedFileIO {
 		// by another application / network node.
 		//
 		// WARNING: this API is only provided as a MANUAL OVERRIDE means for human supervision
-		// empowered to act and clean up after a disasterous situation.
+		// empowered to act and clean up after a disastrous situation.
 		// Normal mode of operation would be to let `monitor_for_lock_availability()` monitor
 		// for lock staleness due to application abort/crashes/etc. and its built-in auto-recovery
 		// mechanism.
@@ -85,7 +85,7 @@ namespace NetworkedFileIO {
 		//
 		// You can only override the basic 'beat' (which in itself is already dangerous
 		// enough, because now no need to do this EVERYWHERE!); you do NOT have the option
-		// to change the watchdog kick beat vs. the steleness monitor beat frequencies:
+		// to change the watchdog kick beat vs. the staleness monitor beat frequencies:
 		// that is extremely risky!
 		//
 		// We also DO NOT allow this override to be class-wide (a.k.a. 'static') because
